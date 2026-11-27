@@ -1,0 +1,13 @@
+{
+    "H": "numeric",
+    "diameter": "numeric",
+    "albedo": "numeric",
+    "epoch": "numeric",
+    "epoch_mjd": "numeric",
+    "epoch_cal": "numeric",
+    "ma": "numeric",
+    "tp": "numeric",
+    "tp_cal": "numeric",
+    "class": "categorical",
+    "rms": "numeric"
+}
