@@ -1,296 +1,192 @@
-
+import os
+import json
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
-
-from pathlib import Path
+import sklearn
 
 # --------------------------------
-# 1. Page Configuration
+# 1. Page configuration
 # --------------------------------
 
 st.set_page_config(
-    page_title="Asteroid Prediction System",
-    page_icon="☄️",
+    page_title="Planetary Defense Analytics",
+    page_icon="🌌",
     layout="wide"
 )
 
-st.title("☄️ Asteroid Prediction System")
-
+st.title("🌌 Planetary Defense Analytics")
 st.write(
-    "Enter asteroid physical and orbital parameters "
-    "to predict its hazardous status and estimated diameter."
+    "Predict asteroid hazard status and estimate asteroid diameter."
 )
 
 # --------------------------------
-# 2. Load Saved Pipelines
+# 2. Display sklearn version
 # --------------------------------
 
-MODEL_DIR = Path(__file__).parent / "models"
+st.sidebar.write(
+    "Scikit-learn version:",
+    sklearn.__version__
+)
+
+# --------------------------------
+# 3. Load saved models
+# --------------------------------
 
 @st.cache_resource
 def load_models():
 
-    classification_model = joblib.load(
-        MODEL_DIR / "case1_pha_pipeline.pkl"
+    pha_model = joblib.load(
+        "asteroid_pha_model.pkl"
     )
 
-    regression_model = joblib.load(
-        MODEL_DIR / "case2_diameter_pipeline.pkl"
+    diameter_model = joblib.load(
+        "best_asteroid_regression_model.pkl"
     )
 
-    return classification_model, regression_model
+    return pha_model, diameter_model
 
 
 try:
-    classification_model, regression_model = load_models()
+    pha_model, diameter_model = load_models()
 
 except Exception as e:
-    st.error(f"Unable to load saved pipelines: {e}")
+    st.error(f"Error loading models: {e}")
     st.stop()
 
 
 # --------------------------------
-# 3. Get Required Features
+# 4. Load feature schema
 # --------------------------------
 
-def get_features(model):
+if os.path.exists("feature_schema.json"):
 
-    if not hasattr(model, "feature_names_in_"):
-        raise ValueError(
-            "Pipeline does not contain feature names. "
-            "Save the pipeline after fitting it with a pandas DataFrame."
-        )
+    with open("feature_schema.json", "r") as file:
+        feature_schema = json.load(file)
 
-    return list(model.feature_names_in_)
-
-
-try:
-    classification_features = get_features(
-        classification_model
+else:
+    st.warning(
+        "Feature schema not found. "
+        "Using numeric input fields by default."
     )
 
-    regression_features = get_features(
-        regression_model
-    )
-
-except ValueError as e:
-    st.error(str(e))
-    st.stop()
-
-
-# Combine features needed by both models
-all_features = list(dict.fromkeys(
-    classification_features + regression_features
-))
+    feature_schema = {}
 
 
 # --------------------------------
-# 4. Input Form
+# 5. Get model input columns
+# --------------------------------
+
+pha_features = list(pha_model.feature_names_in_)
+
+diameter_features = list(
+    diameter_model.feature_names_in_
+)
+
+all_features = list(
+    dict.fromkeys(pha_features + diameter_features)
+)
+
+
+# --------------------------------
+# 6. Create user input fields
 # --------------------------------
 
 st.subheader("Enter Asteroid Parameters")
 
-st.info(
-    "Enter all required parameters. Use the same units "
-    "and definitions as those used during model training."
-)
+user_inputs = {}
 
-with st.form("asteroid_input_form"):
+with st.form("asteroid_form"):
 
-    input_values = {}
+    for feature in all_features:
 
-    # Display inputs in three columns
-    columns = st.columns(3)
+        feature_type = feature_schema.get(
+            feature, "numeric"
+        )
 
-    for index, feature in enumerate(all_features):
+        if feature_type == "numeric":
 
-        with columns[index % 3]:
-
-            input_values[feature] = st.number_input(
-                label=feature,
+            user_inputs[feature] = st.number_input(
+                f"Enter {feature}",
                 value=0.0,
-                step=0.01,
-                format="%.6f",
-                key=f"input_{feature}"
+                format="%.6f"
             )
 
-    submitted = st.form_submit_button(
-        "Predict Asteroid Status and Diameter",
-        use_container_width=True
+        else:
+
+            user_inputs[feature] = st.text_input(
+                f"Enter {feature}",
+                value=""
+            )
+
+    submit = st.form_submit_button(
+        "Predict Asteroid"
     )
 
 
 # --------------------------------
-# 5. Validate Inputs
+# 7. Prediction
 # --------------------------------
 
-def validate_inputs(values):
+if submit:
 
-    errors = []
+    input_df = pd.DataFrame([user_inputs])
 
-    for feature, value in values.items():
+    try:
 
-        if not np.isfinite(value):
-            errors.append(
-                f"{feature} must contain a valid finite number."
+        # Classification input
+        pha_input = input_df[pha_features]
+
+        # Regression input
+        diameter_input = input_df[diameter_features]
+
+        # PHA prediction
+        pha_prediction = pha_model.predict(
+            pha_input
+        )[0]
+
+        # Diameter prediction
+        diameter_prediction = diameter_model.predict(
+            diameter_input
+        )[0]
+
+        st.subheader("Prediction Results")
+
+        if pha_prediction == 1:
+            st.error(
+                "⚠️ Potentially Hazardous Asteroid"
+            )
+        else:
+            st.success(
+                "✅ Non-Potentially Hazardous Asteroid"
             )
 
-    # Physical parameter validation
-    if "diameter" in values and values["diameter"] < 0:
-        errors.append("Diameter cannot be negative.")
-
-    if "albedo" in values:
-        if not 0 <= values["albedo"] <= 1:
-            errors.append("Albedo must be between 0 and 1.")
-
-    if "e" in values:
-        if not 0 <= values["e"] < 1:
-            errors.append(
-                "Orbital eccentricity must be between 0 and 1."
-            )
-
-    if "a" in values and values["a"] <= 0:
-        errors.append("Semi-major axis must be greater than zero.")
-
-    return errors
-
-
-# --------------------------------
-# 6. Make Predictions
-# --------------------------------
-
-if submitted:
-
-    errors = validate_inputs(input_values)
-
-    if errors:
-
-        st.error("Please correct the following inputs:")
-
-        for error in errors:
-            st.write(f"- {error}")
-
-    else:
-
-        # Create input DataFrame
-        input_df = pd.DataFrame(
-            [input_values]
+        st.metric(
+            "Estimated Asteroid Diameter",
+            f"{diameter_prediction:.4f}"
         )
 
-        try:
+        # Optional probability
+        if hasattr(pha_model, "predict_proba"):
 
-            # Prepare separate inputs for each pipeline
-            classification_input = input_df[
-                classification_features
-            ]
-
-            regression_input = input_df[
-                regression_features
-            ]
-
-            # Case 1: PHA Classification
-            pha_prediction = classification_model.predict(
-                classification_input
+            probabilities = pha_model.predict_proba(
+                pha_input
             )[0]
 
-            # Case 2: Diameter Regression
-            diameter_prediction = regression_model.predict(
-                regression_input
-            )[0]
-
-            st.divider()
-
-            st.subheader("Prediction Results")
-
-            col1, col2 = st.columns(2)
-
-            # Classification result
-            with col1:
-
-                st.markdown("### Case 1: PHA Classification")
-
-                if str(pha_prediction).strip().lower() in [
-                    "1", "true", "yes"
-                ]:
-
-                    st.error(
-                        "Potentially Hazardous Asteroid (PHA)"
-                    )
-
-                elif str(pha_prediction).strip().lower() in [
-                    "0", "false", "no"
-                ]:
-
-                    st.success(
-                        "Non-Potentially Hazardous Asteroid"
-                    )
-
-                else:
-                    st.info(
-                        f"Predicted PHA class: {pha_prediction}"
-                    )
-
-                # Display classification probability
-                if hasattr(
-                    classification_model,
-                    "predict_proba"
-                ):
-
-                    probabilities = (
-                        classification_model.predict_proba(
-                            classification_input
-                        )[0]
-                    )
-
-                    classes = classification_model.classes_
-
-                    for cls, probability in zip(
-                        classes, probabilities
-                    ):
-
-                        if str(cls) == "1":
-                            st.metric(
-                                "PHA Probability",
-                                f"{probability * 100:.2f}%"
-                            )
-
-            # Regression result
-            with col2:
-
-                st.markdown("### Case 2: Diameter Prediction")
-
-                if (
-                    np.isfinite(diameter_prediction)
-                    and diameter_prediction >= 0
-                ):
-
-                    st.metric(
-                        "Predicted Asteroid Diameter",
-                        f"{diameter_prediction:.4f}"
-                    )
-
-                    st.caption(
-                        "Diameter unit: same unit used during training."
-                    )
-
-                else:
-                    st.error(
-                        "The model returned an invalid diameter."
-                    )
-
-            # Display entered values
-            with st.expander("View Input Parameters"):
-
-                st.dataframe(
-                    input_df,
-                    use_container_width=True
-                )
-
-        except Exception as e:
-
-            st.error(
-                f"Prediction failed. Please check the model "
-                f"features and input values. Details: {e}"
+            st.write(
+                "PHA prediction probabilities:"
             )
+
+            st.write({
+                str(label): f"{probability:.2%}"
+                for label, probability in zip(
+                    pha_model.classes_,
+                    probabilities
+                )
+            })
+
+    except Exception as e:
+
+        st.error(
+            f"Prediction error: {e}"
+        )
